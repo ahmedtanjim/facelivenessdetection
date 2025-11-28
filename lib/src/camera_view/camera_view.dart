@@ -99,20 +99,63 @@ class _CameraViewState extends State<CameraView> with WidgetsBindingObserver {
           imageFormatGroup: Platform.isAndroid
               ? ImageFormatGroup.nv21
               : ImageFormatGroup.bgra8888);
-      _controller?.initialize().then((_) async {
-        if (!mounted) {
-          return;
+
+      bool initialized = false;
+      int retryCount = 0;
+      const maxRetries = 3;
+      while (!initialized && retryCount < maxRetries) {
+        try {
+          await _controller?.initialize();
+          if (_controller?.value.isInitialized == true) {
+            initialized = true;
+            debugPrint(
+                '✅ Camera initialized successfully on attempt ${retryCount + 1}');
+          }
+        } catch (e) {
+          retryCount++;
+          debugPrint('⚠️ Camera initialization attempt $retryCount failed: $e');
+          if (retryCount < maxRetries) {
+            // Wait before retrying
+            await Future.delayed(Duration(milliseconds: 300 * retryCount));
+          } else {
+            debugPrint(
+                '❌ Camera initialization failed after $maxRetries attempts');
+            if (mounted) {
+              setState(() {
+                // Set error state if available
+              });
+            }
+            return;
+          }
         }
-         await _controller?.setFlashMode(FlashMode.off);
-        _controller?.startImageStream(_processCameraImage).then((value) {
-          if (widget.onCameraFeedReady != null) {
-            widget.onCameraFeedReady!();
-          }
-          if (widget.onCameraLensDirectionChanged != null) {
-            widget.onCameraLensDirectionChanged!(camera.lensDirection);
-          }
-        });
-        setState(() {});
+      }
+      if (!mounted || !initialized) {
+        return;
+      }
+
+      try {
+        await _controller?.setFlashMode(FlashMode.off);
+      } catch (e) {
+        debugPrint('⚠️ Could not set flash mode: $e');
+      }
+      _controller?.startImageStream(_processCameraImage).then((value) {
+        debugPrint('📹 Camera image stream started successfully');
+        if (widget.onCameraFeedReady != null) {
+          widget.onCameraFeedReady!();
+        }
+        if (widget.onCameraLensDirectionChanged != null) {
+          widget.onCameraLensDirectionChanged!(camera.lensDirection);
+        }
+        if (mounted) {
+          setState(() {});
+        }
+      }).catchError((error) {
+        debugPrint('❌ Error starting image stream: $error');
+        if (mounted) {
+          setState(() {
+            // Set error state if available
+          });
+        }
       });
     } catch (ex) {
       debugPrint('Camera error: $ex');
@@ -161,24 +204,24 @@ class _CameraViewState extends State<CameraView> with WidgetsBindingObserver {
   }
 
   Future _stopLiveFeed() async {
-  if (_controller != null) {
-    try {
-      // Check if controller is initialized before stopping image stream
-      if (_controller!.value.isInitialized) {
-        await _controller!.stopImageStream();
+    if (_controller != null) {
+      try {
+        // Check if controller is initialized before stopping image stream
+        if (_controller!.value.isInitialized) {
+          await _controller!.stopImageStream();
+        }
+      } catch (e) {
+        debugPrint('Error stopping image stream: $e');
       }
-    } catch (e) {
-      debugPrint('Error stopping image stream: $e');
+
+      try {
+        await _controller!.dispose();
+      } catch (e) {
+        debugPrint('Error disposing camera controller: $e');
+      }
+      _controller = null;
     }
-    
-    try {
-      await _controller!.dispose();
-    } catch (e) {
-      debugPrint('Error disposing camera controller: $e');
-    }
-    _controller = null;
   }
-}
 
   void _processCameraImage(CameraImage image) {
     final inputImage = _inputImageFromCameraImage(image);
